@@ -33,6 +33,22 @@ on:
         type: boolean
         required: false
         default: true
+      explicit_slot_swap:
+        type: boolean
+        required: false
+        default: false
+      health_check_path:
+        type: string
+        required: false
+        default: /actuator/health
+      staging_health_attempts:
+        type: number
+        required: false
+        default: 30
+      production_health_attempts:
+        type: number
+        required: false
+        default: 10
 
 jobs:
   terraform:
@@ -87,6 +103,116 @@ jobs:
           slot-name: ${{ inputs.slot-name }}
           package: ${{ inputs.package }}
           target-path: ${{ inputs.target-path }}
+      - name: Resolve resource group for slot swap
+        if: env.APPLICATION_CAF_NAME != '' && inputs.explicit_slot_swap && inputs.slot-name != 'production'
+        run: |
+          set -eo pipefail
+          RESOURCE_GROUP=$(az webapp list --query "[?name=='$APPLICATION_CAF_NAME'].resourceGroup | [0]" -o tsv)
+          if [ -z "$RESOURCE_GROUP" ]; then
+            echo "::error::Failed to resolve the resource group for $APPLICATION_CAF_NAME"
+            exit 1
+          fi
+          echo "RESOURCE_GROUP=$RESOURCE_GROUP" >> "$GITHUB_ENV"
+      - name: Verify staging slot health
+        if: env.APPLICATION_CAF_NAME != '' && inputs.explicit_slot_swap && inputs.slot-name != 'production'
+        run: |
+          set -eo pipefail
+          HEALTH_PATH="${{ inputs.health_check_path }}"
+          HEALTH_PATH="/${HEALTH_PATH#/}"
+          URL="https://${APPLICATION_CAF_NAME}-${{ inputs.slot-name }}.azurewebsites.net${HEALTH_PATH}"
+          ATTEMPTS=${{ inputs.staging_health_attempts }}
+
+          echo "Waiting for staging slot to become healthy: $URL"
+          for i in $(seq 1 "$ATTEMPTS"); do
+            STATUS=$(curl --silent --output /dev/null --write-out "%{http_code}" --max-time 10 "$URL" || true)
+            if [ "$STATUS" = "200" ]; then
+              echo "Staging health check passed (HTTP $STATUS) on attempt $i/$ATTEMPTS"
+              exit 0
+            fi
+
+            if [ "$i" -lt "$ATTEMPTS" ]; then
+              echo "Attempt $i/$ATTEMPTS: HTTP $STATUS - retrying in 10s..."
+              sleep 10
+            else
+              echo "Attempt $i/$ATTEMPTS: HTTP $STATUS"
+            fi
+          done
+
+          echo "::error::Staging health check failed after $ATTEMPTS attempts - aborting swap"
+          exit 1
+      - name: Swap staging to production
+        if: env.APPLICATION_CAF_NAME != '' && inputs.explicit_slot_swap && inputs.slot-name != 'production'
+        run: |
+          set -eo pipefail
+          az webapp deployment slot swap \
+            --name "$APPLICATION_CAF_NAME" \
+            --resource-group "$RESOURCE_GROUP" \
+            --slot "${{ inputs.slot-name }}" \
+            --target-slot production
+          echo "SWAP_COMPLETED=true" >> "$GITHUB_ENV"
+      - name: Verify production health
+        if: env.APPLICATION_CAF_NAME != '' && inputs.explicit_slot_swap && inputs.slot-name != 'production'
+        run: |
+          set -eo pipefail
+          HEALTH_PATH="${{ inputs.health_check_path }}"
+          HEALTH_PATH="/${HEALTH_PATH#/}"
+          URL="https://${APPLICATION_CAF_NAME}.azurewebsites.net${HEALTH_PATH}"
+          ATTEMPTS=${{ inputs.production_health_attempts }}
+
+          echo "Verifying production after slot swap: $URL"
+          for i in $(seq 1 "$ATTEMPTS"); do
+            STATUS=$(curl --silent --output /dev/null --write-out "%{http_code}" --max-time 10 "$URL" || true)
+            if [ "$STATUS" = "200" ]; then
+              echo "Production health check passed (HTTP $STATUS) on attempt $i/$ATTEMPTS"
+              exit 0
+            fi
+
+            if [ "$i" -lt "$ATTEMPTS" ]; then
+              echo "Attempt $i/$ATTEMPTS: HTTP $STATUS - retrying in 10s..."
+              sleep 10
+            else
+              echo "Attempt $i/$ATTEMPTS: HTTP $STATUS"
+            fi
+          done
+
+          echo "::error::Production health check failed after $ATTEMPTS attempts"
+          exit 1
+      - name: Roll back failed slot swap
+        if: failure() && env.SWAP_COMPLETED == 'true'
+        run: |
+          set -eo pipefail
+          echo "Rolling back by swapping the staging slot back to production..."
+          az webapp deployment slot swap \
+            --name "$APPLICATION_CAF_NAME" \
+            --resource-group "$RESOURCE_GROUP" \
+            --slot "${{ inputs.slot-name }}" \
+            --target-slot production
+          echo "ROLLBACK_COMPLETED=true" >> "$GITHUB_ENV"
+      - name: Verify rollback health
+        if: failure() && env.ROLLBACK_COMPLETED == 'true'
+        run: |
+          set -eo pipefail
+          HEALTH_PATH="${{ inputs.health_check_path }}"
+          HEALTH_PATH="/${HEALTH_PATH#/}"
+          URL="https://${APPLICATION_CAF_NAME}.azurewebsites.net${HEALTH_PATH}"
+
+          echo "Pinging production after rollback: $URL"
+          for i in $(seq 1 5); do
+            STATUS=$(curl --silent --output /dev/null --write-out "%{http_code}" --max-time 10 "$URL" || true)
+            if [ "$STATUS" = "200" ]; then
+              echo "Rollback health check passed (HTTP $STATUS) on attempt $i/5"
+              exit 0
+            fi
+
+            if [ "$i" -lt 5 ]; then
+              echo "Attempt $i/5: HTTP $STATUS - retrying in 10s..."
+              sleep 10
+            else
+              echo "Attempt $i/5: HTTP $STATUS"
+            fi
+          done
+
+          echo "::warning::Rollback health check did not pass - manual verification is required"
       - name: Deploy to Azure App Service
         if: env.APPLICATION_CAF_NAME != '' && inputs.slot-name2 != ''
         uses: azure/webapps-deploy@v3
