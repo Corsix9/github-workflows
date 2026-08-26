@@ -90,10 +90,19 @@ jobs:
           echo "APPLICATION_CAF_NAME=$(cat terraform-output.json | jq -r '.application_caf_name.value | select(. != null)')" >> $GITHUB_ENV
           echo "FUNCTION_CAF_NAME=$(cat terraform-output.json | jq -r '.function_caf_name.value | select(. != null)')" >> $GITHUB_ENV
       - name: Validate explicit slot swap inputs
-        if: env.APPLICATION_CAF_NAME != '' && inputs.explicit_slot_swap && inputs['slot-name2'] == 'production'
+        if: env.APPLICATION_CAF_NAME != '' && inputs.explicit_slot_swap
+        env:
+          SLOT_NAME: ${{ inputs['slot-name'] }}
+          SECONDARY_SLOT_NAME: ${{ inputs['slot-name2'] }}
         run: |
-          echo "::error::explicit_slot_swap cannot be combined with slot-name2: production"
-          exit 1
+          if [ "$SLOT_NAME" = "production" ]; then
+            echo "::error::explicit_slot_swap requires a non-production slot-name"
+            exit 1
+          fi
+          if [ "$SECONDARY_SLOT_NAME" = "production" ]; then
+            echo "::error::explicit_slot_swap cannot be combined with slot-name2: production"
+            exit 1
+          fi
       - name: Download application package
         if: env.APPLICATION_CAF_NAME != ''
         uses: actions/download-artifact@v8
