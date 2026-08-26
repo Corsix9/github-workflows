@@ -89,6 +89,11 @@ jobs:
         run: |
           echo "APPLICATION_CAF_NAME=$(cat terraform-output.json | jq -r '.application_caf_name.value | select(. != null)')" >> $GITHUB_ENV
           echo "FUNCTION_CAF_NAME=$(cat terraform-output.json | jq -r '.function_caf_name.value | select(. != null)')" >> $GITHUB_ENV
+      - name: Validate explicit slot swap inputs
+        if: env.APPLICATION_CAF_NAME != '' && inputs.explicit_slot_swap && inputs.slot-name2 == 'production'
+        run: |
+          echo "::error::explicit_slot_swap cannot be combined with slot-name2: production"
+          exit 1
       - name: Download application package
         if: env.APPLICATION_CAF_NAME != ''
         uses: actions/download-artifact@v8
@@ -115,11 +120,14 @@ jobs:
           echo "RESOURCE_GROUP=$RESOURCE_GROUP" >> "$GITHUB_ENV"
       - name: Verify staging slot health
         if: env.APPLICATION_CAF_NAME != '' && inputs.explicit_slot_swap && inputs.slot-name != 'production'
+        env:
+          HEALTH_CHECK_PATH: ${{ inputs.health_check_path }}
+          SLOT_NAME: ${{ inputs.slot-name }}
         run: |
           set -eo pipefail
-          HEALTH_PATH="${{ inputs.health_check_path }}"
+          HEALTH_PATH="$HEALTH_CHECK_PATH"
           HEALTH_PATH="/${HEALTH_PATH#/}"
-          URL="https://${APPLICATION_CAF_NAME}-${{ inputs.slot-name }}.azurewebsites.net${HEALTH_PATH}"
+          URL="https://${APPLICATION_CAF_NAME}-${SLOT_NAME}.azurewebsites.net${HEALTH_PATH}"
           ATTEMPTS=${{ inputs.staging_health_attempts }}
 
           echo "Waiting for staging slot to become healthy: $URL"
@@ -142,19 +150,23 @@ jobs:
           exit 1
       - name: Swap staging to production
         if: env.APPLICATION_CAF_NAME != '' && inputs.explicit_slot_swap && inputs.slot-name != 'production'
+        env:
+          SLOT_NAME: ${{ inputs.slot-name }}
         run: |
           set -eo pipefail
           az webapp deployment slot swap \
             --name "$APPLICATION_CAF_NAME" \
             --resource-group "$RESOURCE_GROUP" \
-            --slot "${{ inputs.slot-name }}" \
+            --slot "$SLOT_NAME" \
             --target-slot production
           echo "SWAP_COMPLETED=true" >> "$GITHUB_ENV"
       - name: Verify production health
         if: env.APPLICATION_CAF_NAME != '' && inputs.explicit_slot_swap && inputs.slot-name != 'production'
+        env:
+          HEALTH_CHECK_PATH: ${{ inputs.health_check_path }}
         run: |
           set -eo pipefail
-          HEALTH_PATH="${{ inputs.health_check_path }}"
+          HEALTH_PATH="$HEALTH_CHECK_PATH"
           HEALTH_PATH="/${HEALTH_PATH#/}"
           URL="https://${APPLICATION_CAF_NAME}.azurewebsites.net${HEALTH_PATH}"
           ATTEMPTS=${{ inputs.production_health_attempts }}
@@ -179,20 +191,24 @@ jobs:
           exit 1
       - name: Roll back failed slot swap
         if: failure() && env.SWAP_COMPLETED == 'true'
+        env:
+          SLOT_NAME: ${{ inputs.slot-name }}
         run: |
           set -eo pipefail
           echo "Rolling back by swapping the staging slot back to production..."
           az webapp deployment slot swap \
             --name "$APPLICATION_CAF_NAME" \
             --resource-group "$RESOURCE_GROUP" \
-            --slot "${{ inputs.slot-name }}" \
+            --slot "$SLOT_NAME" \
             --target-slot production
           echo "ROLLBACK_COMPLETED=true" >> "$GITHUB_ENV"
       - name: Verify rollback health
         if: failure() && env.ROLLBACK_COMPLETED == 'true'
+        env:
+          HEALTH_CHECK_PATH: ${{ inputs.health_check_path }}
         run: |
           set -eo pipefail
-          HEALTH_PATH="${{ inputs.health_check_path }}"
+          HEALTH_PATH="$HEALTH_CHECK_PATH"
           HEALTH_PATH="/${HEALTH_PATH#/}"
           URL="https://${APPLICATION_CAF_NAME}.azurewebsites.net${HEALTH_PATH}"
 
