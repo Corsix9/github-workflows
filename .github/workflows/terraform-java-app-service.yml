@@ -195,6 +195,7 @@ jobs:
             STATUS=$(curl --silent --output /dev/null --write-out "%{http_code}" --max-time 10 "$URL" || true)
             if [ "$STATUS" = "200" ]; then
               echo "Production health check passed (HTTP $STATUS) on attempt $i/$ATTEMPTS"
+              echo "PRODUCTION_HEALTH_PASSED=true" >> "$GITHUB_ENV"
               exit 0
             fi
 
@@ -209,7 +210,7 @@ jobs:
           echo "::error::Production health check failed after $ATTEMPTS attempts"
           exit 1
       - name: Roll back failed slot swap
-        if: failure() && env.SWAP_COMPLETED == 'true'
+        if: failure() && env.SWAP_COMPLETED == 'true' && env.PRODUCTION_HEALTH_PASSED != 'true'
         env:
           SLOT_NAME: ${{ inputs['slot-name'] }}
         run: |
