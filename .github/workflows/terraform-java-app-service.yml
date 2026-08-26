@@ -90,7 +90,7 @@ jobs:
           echo "APPLICATION_CAF_NAME=$(cat terraform-output.json | jq -r '.application_caf_name.value | select(. != null)')" >> $GITHUB_ENV
           echo "FUNCTION_CAF_NAME=$(cat terraform-output.json | jq -r '.function_caf_name.value | select(. != null)')" >> $GITHUB_ENV
       - name: Validate explicit slot swap inputs
-        if: env.APPLICATION_CAF_NAME != '' && inputs.explicit_slot_swap && inputs.slot-name2 == 'production'
+        if: env.APPLICATION_CAF_NAME != '' && inputs.explicit_slot_swap && inputs['slot-name2'] == 'production'
         run: |
           echo "::error::explicit_slot_swap cannot be combined with slot-name2: production"
           exit 1
@@ -105,11 +105,11 @@ jobs:
         uses: azure/webapps-deploy@v3
         with:
           app-name: ${{ env.APPLICATION_CAF_NAME }}
-          slot-name: ${{ inputs.slot-name }}
+          slot-name: ${{ inputs['slot-name'] }}
           package: ${{ inputs.package }}
           target-path: ${{ inputs.target-path }}
       - name: Resolve resource group for slot swap
-        if: env.APPLICATION_CAF_NAME != '' && inputs.explicit_slot_swap && inputs.slot-name != 'production'
+        if: env.APPLICATION_CAF_NAME != '' && inputs.explicit_slot_swap && inputs['slot-name'] != 'production'
         run: |
           set -eo pipefail
           RESOURCE_GROUP=$(az webapp list --query "[?name=='$APPLICATION_CAF_NAME'].resourceGroup | [0]" -o tsv)
@@ -119,10 +119,10 @@ jobs:
           fi
           echo "RESOURCE_GROUP=$RESOURCE_GROUP" >> "$GITHUB_ENV"
       - name: Verify staging slot health
-        if: env.APPLICATION_CAF_NAME != '' && inputs.explicit_slot_swap && inputs.slot-name != 'production'
+        if: env.APPLICATION_CAF_NAME != '' && inputs.explicit_slot_swap && inputs['slot-name'] != 'production'
         env:
           HEALTH_CHECK_PATH: ${{ inputs.health_check_path }}
-          SLOT_NAME: ${{ inputs.slot-name }}
+          SLOT_NAME: ${{ inputs['slot-name'] }}
         run: |
           set -eo pipefail
           HEALTH_PATH="$HEALTH_CHECK_PATH"
@@ -149,9 +149,9 @@ jobs:
           echo "::error::Staging health check failed after $ATTEMPTS attempts - aborting swap"
           exit 1
       - name: Swap staging to production
-        if: env.APPLICATION_CAF_NAME != '' && inputs.explicit_slot_swap && inputs.slot-name != 'production'
+        if: env.APPLICATION_CAF_NAME != '' && inputs.explicit_slot_swap && inputs['slot-name'] != 'production'
         env:
-          SLOT_NAME: ${{ inputs.slot-name }}
+          SLOT_NAME: ${{ inputs['slot-name'] }}
         run: |
           set -eo pipefail
           az webapp deployment slot swap \
@@ -161,7 +161,7 @@ jobs:
             --target-slot production
           echo "SWAP_COMPLETED=true" >> "$GITHUB_ENV"
       - name: Verify production health
-        if: env.APPLICATION_CAF_NAME != '' && inputs.explicit_slot_swap && inputs.slot-name != 'production'
+        if: env.APPLICATION_CAF_NAME != '' && inputs.explicit_slot_swap && inputs['slot-name'] != 'production'
         env:
           HEALTH_CHECK_PATH: ${{ inputs.health_check_path }}
         run: |
@@ -192,7 +192,7 @@ jobs:
       - name: Roll back failed slot swap
         if: failure() && env.SWAP_COMPLETED == 'true'
         env:
-          SLOT_NAME: ${{ inputs.slot-name }}
+          SLOT_NAME: ${{ inputs['slot-name'] }}
         run: |
           set -eo pipefail
           echo "Rolling back by swapping the staging slot back to production..."
@@ -230,11 +230,11 @@ jobs:
 
           echo "::warning::Rollback health check did not pass - manual verification is required"
       - name: Deploy to Azure App Service
-        if: env.APPLICATION_CAF_NAME != '' && inputs.slot-name2 != ''
+        if: env.APPLICATION_CAF_NAME != '' && inputs['slot-name2'] != ''
         uses: azure/webapps-deploy@v3
         with:
           app-name: ${{ env.APPLICATION_CAF_NAME }}
-          slot-name: ${{ inputs.slot-name2 }}
+          slot-name: ${{ inputs['slot-name2'] }}
           package: ${{ inputs.package }}
           target-path: ${{ inputs.target-path }}
       - name: Download function package
