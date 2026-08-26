@@ -94,7 +94,17 @@ jobs:
         env:
           SLOT_NAME: ${{ inputs['slot-name'] }}
           SECONDARY_SLOT_NAME: ${{ inputs['slot-name2'] }}
+          STAGING_HEALTH_ATTEMPTS: ${{ inputs.staging_health_attempts }}
+          PRODUCTION_HEALTH_ATTEMPTS: ${{ inputs.production_health_attempts }}
         run: |
+          if ! [[ "$STAGING_HEALTH_ATTEMPTS" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::staging_health_attempts must be a positive integer"
+            exit 1
+          fi
+          if ! [[ "$PRODUCTION_HEALTH_ATTEMPTS" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::production_health_attempts must be a positive integer"
+            exit 1
+          fi
           if [ "$SLOT_NAME" = "production" ]; then
             echo "::error::explicit_slot_swap requires a non-production slot-name"
             exit 1
