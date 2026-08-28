@@ -105,8 +105,8 @@ jobs:
             echo "::error::production_health_attempts must be a positive integer"
             exit 1
           fi
-          if [ "$SLOT_NAME" = "production" ]; then
-            echo "::error::explicit_slot_swap requires a non-production slot-name"
+          if [ -z "$SLOT_NAME" ] || [ "$SLOT_NAME" = "production" ]; then
+            echo "::error::explicit_slot_swap requires slot-name to be set to a non-production slot"
             exit 1
           fi
           if [ "$SECONDARY_SLOT_NAME" = "production" ]; then
