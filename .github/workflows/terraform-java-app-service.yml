@@ -90,7 +90,7 @@ jobs:
           echo "APPLICATION_CAF_NAME=$(cat terraform-output.json | jq -r '.application_caf_name.value | select(. != null)')" >> $GITHUB_ENV
           echo "FUNCTION_CAF_NAME=$(cat terraform-output.json | jq -r '.function_caf_name.value | select(. != null)')" >> $GITHUB_ENV
       - name: Validate explicit slot swap inputs
-        if: env.APPLICATION_CAF_NAME != '' && inputs.explicit_slot_swap
+        if: success() && env.APPLICATION_CAF_NAME != '' && inputs.explicit_slot_swap
         env:
           SLOT_NAME: ${{ inputs['slot-name'] }}
           SECONDARY_SLOT_NAME: ${{ inputs['slot-name2'] }}
@@ -114,21 +114,21 @@ jobs:
             exit 1
           fi
       - name: Download application package
-        if: env.APPLICATION_CAF_NAME != ''
+        if: success() && env.APPLICATION_CAF_NAME != ''
         uses: actions/download-artifact@v8
         with:
           name: package
           path: app-package
       - name: Deploy to Azure App Service
-        if: env.APPLICATION_CAF_NAME != ''
+        if: success() && env.APPLICATION_CAF_NAME != ''
         uses: azure/webapps-deploy@v3
         with:
           app-name: ${{ env.APPLICATION_CAF_NAME }}
           slot-name: ${{ inputs['slot-name'] }}
           package: ${{ inputs.package }}
-          target-path: ${{ inputs.target-path }}
+          target-path: ${{ inputs['target-path'] }}
       - name: Resolve resource group for slot swap
-        if: env.APPLICATION_CAF_NAME != '' && inputs.explicit_slot_swap && inputs['slot-name'] != 'production'
+        if: success() && env.APPLICATION_CAF_NAME != '' && inputs.explicit_slot_swap && inputs['slot-name'] != 'production'
         run: |
           set -eo pipefail
           RESOURCE_GROUP=$(az webapp list --query "[?name=='$APPLICATION_CAF_NAME'].resourceGroup | [0]" -o tsv)
@@ -138,16 +138,17 @@ jobs:
           fi
           echo "RESOURCE_GROUP=$RESOURCE_GROUP" >> "$GITHUB_ENV"
       - name: Verify staging slot health
-        if: env.APPLICATION_CAF_NAME != '' && inputs.explicit_slot_swap && inputs['slot-name'] != 'production'
+        if: success() && env.APPLICATION_CAF_NAME != '' && inputs.explicit_slot_swap && inputs['slot-name'] != 'production'
         env:
           HEALTH_CHECK_PATH: ${{ inputs.health_check_path }}
           SLOT_NAME: ${{ inputs['slot-name'] }}
+          STAGING_HEALTH_ATTEMPTS: ${{ inputs.staging_health_attempts }}
         run: |
           set -eo pipefail
           HEALTH_PATH="$HEALTH_CHECK_PATH"
           HEALTH_PATH="/${HEALTH_PATH#/}"
           URL="https://${APPLICATION_CAF_NAME}-${SLOT_NAME}.azurewebsites.net${HEALTH_PATH}"
-          ATTEMPTS=${{ inputs.staging_health_attempts }}
+          ATTEMPTS="$STAGING_HEALTH_ATTEMPTS"
 
           echo "Waiting for staging slot to become healthy: $URL"
           for i in $(seq 1 "$ATTEMPTS"); do
@@ -168,7 +169,7 @@ jobs:
           echo "::error::Staging health check failed after $ATTEMPTS attempts - aborting swap"
           exit 1
       - name: Swap staging to production
-        if: env.APPLICATION_CAF_NAME != '' && inputs.explicit_slot_swap && inputs['slot-name'] != 'production'
+        if: success() && env.APPLICATION_CAF_NAME != '' && inputs.explicit_slot_swap && inputs['slot-name'] != 'production'
         env:
           SLOT_NAME: ${{ inputs['slot-name'] }}
         run: |
@@ -180,15 +181,16 @@ jobs:
             --target-slot production
           echo "SWAP_COMPLETED=true" >> "$GITHUB_ENV"
       - name: Verify production health
-        if: env.APPLICATION_CAF_NAME != '' && inputs.explicit_slot_swap && inputs['slot-name'] != 'production'
+        if: success() && env.APPLICATION_CAF_NAME != '' && inputs.explicit_slot_swap && inputs['slot-name'] != 'production'
         env:
           HEALTH_CHECK_PATH: ${{ inputs.health_check_path }}
+          PRODUCTION_HEALTH_ATTEMPTS: ${{ inputs.production_health_attempts }}
         run: |
           set -eo pipefail
           HEALTH_PATH="$HEALTH_CHECK_PATH"
           HEALTH_PATH="/${HEALTH_PATH#/}"
           URL="https://${APPLICATION_CAF_NAME}.azurewebsites.net${HEALTH_PATH}"
-          ATTEMPTS=${{ inputs.production_health_attempts }}
+          ATTEMPTS="$PRODUCTION_HEALTH_ATTEMPTS"
 
           echo "Verifying production after slot swap: $URL"
           for i in $(seq 1 "$ATTEMPTS"); do
@@ -250,21 +252,21 @@ jobs:
 
           echo "::warning::Rollback health check did not pass - manual verification is required"
       - name: Deploy to Azure App Service
-        if: env.APPLICATION_CAF_NAME != '' && inputs['slot-name2'] != ''
+        if: success() && env.APPLICATION_CAF_NAME != '' && inputs['slot-name2'] != ''
         uses: azure/webapps-deploy@v3
         with:
           app-name: ${{ env.APPLICATION_CAF_NAME }}
           slot-name: ${{ inputs['slot-name2'] }}
           package: ${{ inputs.package }}
-          target-path: ${{ inputs.target-path }}
+          target-path: ${{ inputs['target-path'] }}
       - name: Download function package
-        if: inputs.deploy-function && env.FUNCTION_CAF_NAME != ''
+        if: success() && inputs['deploy-function'] && env.FUNCTION_CAF_NAME != ''
         uses: actions/download-artifact@v8
         with:
           name: function-package
           path: function-package
       - name: Deploy to Azure Function
-        if: inputs.deploy-function && env.FUNCTION_CAF_NAME != ''
+        if: success() && inputs['deploy-function'] && env.FUNCTION_CAF_NAME != ''
         uses: azure/functions-action@v1
         with:
           app-name: ${{ env.FUNCTION_CAF_NAME }}
