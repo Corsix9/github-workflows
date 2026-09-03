@@ -89,14 +89,19 @@ jobs:
         run: |
           echo "APPLICATION_CAF_NAME=$(cat terraform-output.json | jq -r '.application_caf_name.value | select(. != null)')" >> $GITHUB_ENV
           echo "FUNCTION_CAF_NAME=$(cat terraform-output.json | jq -r '.function_caf_name.value | select(. != null)')" >> $GITHUB_ENV
+          echo "RESOURCE_GROUP=$(cat terraform-output.json | jq -r '.resource_group_name.value | select(. != null)')" >> $GITHUB_ENV
       - name: Validate explicit slot swap inputs
-        if: success() && env.APPLICATION_CAF_NAME != '' && inputs.explicit_slot_swap
+        if: env.APPLICATION_CAF_NAME != '' && inputs.explicit_slot_swap
         env:
-          SLOT_NAME: ${{ inputs['slot-name'] }}
-          SECONDARY_SLOT_NAME: ${{ inputs['slot-name2'] }}
+          SLOT_NAME: ${{ inputs.slot-name }}
+          SECONDARY_SLOT_NAME: ${{ inputs.slot-name2 }}
           STAGING_HEALTH_ATTEMPTS: ${{ inputs.staging_health_attempts }}
           PRODUCTION_HEALTH_ATTEMPTS: ${{ inputs.production_health_attempts }}
         run: |
+          if [ -z "$RESOURCE_GROUP" ]; then
+            echo "::error::terraform output is missing resource_group_name"
+            exit 1
+          fi
           if ! [[ "$STAGING_HEALTH_ATTEMPTS" =~ ^[1-9][0-9]*$ ]]; then
             echo "::error::staging_health_attempts must be a positive integer"
             exit 1
@@ -114,34 +119,24 @@ jobs:
             exit 1
           fi
       - name: Download application package
-        if: success() && env.APPLICATION_CAF_NAME != ''
+        if: env.APPLICATION_CAF_NAME != ''
         uses: actions/download-artifact@v8
         with:
           name: package
           path: app-package
       - name: Deploy to Azure App Service
-        if: success() && env.APPLICATION_CAF_NAME != ''
+        if: env.APPLICATION_CAF_NAME != ''
         uses: azure/webapps-deploy@v3
         with:
           app-name: ${{ env.APPLICATION_CAF_NAME }}
-          slot-name: ${{ inputs['slot-name'] }}
+          slot-name: ${{ inputs.slot-name }}
           package: ${{ inputs.package }}
-          target-path: ${{ inputs['target-path'] }}
-      - name: Resolve resource group for slot swap
-        if: success() && env.APPLICATION_CAF_NAME != '' && inputs.explicit_slot_swap && inputs['slot-name'] != 'production'
-        run: |
-          set -eo pipefail
-          RESOURCE_GROUP=$(az webapp list --query "[?name=='$APPLICATION_CAF_NAME'].resourceGroup | [0]" -o tsv)
-          if [ -z "$RESOURCE_GROUP" ]; then
-            echo "::error::Failed to resolve the resource group for $APPLICATION_CAF_NAME"
-            exit 1
-          fi
-          echo "RESOURCE_GROUP=$RESOURCE_GROUP" >> "$GITHUB_ENV"
+          target-path: ${{ inputs.target-path }}
       - name: Verify staging slot health
-        if: success() && env.APPLICATION_CAF_NAME != '' && inputs.explicit_slot_swap && inputs['slot-name'] != 'production'
+        if: env.APPLICATION_CAF_NAME != '' && inputs.explicit_slot_swap && inputs.slot-name != 'production'
         env:
           HEALTH_CHECK_PATH: ${{ inputs.health_check_path }}
-          SLOT_NAME: ${{ inputs['slot-name'] }}
+          SLOT_NAME: ${{ inputs.slot-name }}
           STAGING_HEALTH_ATTEMPTS: ${{ inputs.staging_health_attempts }}
         run: |
           set -eo pipefail
@@ -169,9 +164,9 @@ jobs:
           echo "::error::Staging health check failed after $ATTEMPTS attempts - aborting swap"
           exit 1
       - name: Swap staging to production
-        if: success() && env.APPLICATION_CAF_NAME != '' && inputs.explicit_slot_swap && inputs['slot-name'] != 'production'
+        if: env.APPLICATION_CAF_NAME != '' && inputs.explicit_slot_swap && inputs.slot-name != 'production'
         env:
-          SLOT_NAME: ${{ inputs['slot-name'] }}
+          SLOT_NAME: ${{ inputs.slot-name }}
         run: |
           set -eo pipefail
           az webapp deployment slot swap \
@@ -181,7 +176,7 @@ jobs:
             --target-slot production
           echo "SWAP_COMPLETED=true" >> "$GITHUB_ENV"
       - name: Verify production health
-        if: success() && env.APPLICATION_CAF_NAME != '' && inputs.explicit_slot_swap && inputs['slot-name'] != 'production'
+        if: env.APPLICATION_CAF_NAME != '' && inputs.explicit_slot_swap && inputs.slot-name != 'production'
         env:
           HEALTH_CHECK_PATH: ${{ inputs.health_check_path }}
           PRODUCTION_HEALTH_ATTEMPTS: ${{ inputs.production_health_attempts }}
@@ -214,7 +209,7 @@ jobs:
       - name: Roll back failed slot swap
         if: failure() && env.SWAP_COMPLETED == 'true' && env.PRODUCTION_HEALTH_PASSED != 'true'
         env:
-          SLOT_NAME: ${{ inputs['slot-name'] }}
+          SLOT_NAME: ${{ inputs.slot-name }}
         run: |
           set -eo pipefail
           echo "Rolling back by swapping the staging slot back to production..."
@@ -252,21 +247,21 @@ jobs:
 
           echo "::warning::Rollback health check did not pass - manual verification is required"
       - name: Deploy to Azure App Service
-        if: success() && env.APPLICATION_CAF_NAME != '' && inputs['slot-name2'] != ''
+        if: env.APPLICATION_CAF_NAME != '' && inputs.slot-name2 != ''
         uses: azure/webapps-deploy@v3
         with:
           app-name: ${{ env.APPLICATION_CAF_NAME }}
-          slot-name: ${{ inputs['slot-name2'] }}
+          slot-name: ${{ inputs.slot-name2 }}
           package: ${{ inputs.package }}
-          target-path: ${{ inputs['target-path'] }}
+          target-path: ${{ inputs.target-path }}
       - name: Download function package
-        if: success() && inputs['deploy-function'] && env.FUNCTION_CAF_NAME != ''
+        if: inputs.deploy-function && env.FUNCTION_CAF_NAME != ''
         uses: actions/download-artifact@v8
         with:
           name: function-package
           path: function-package
       - name: Deploy to Azure Function
-        if: success() && inputs['deploy-function'] && env.FUNCTION_CAF_NAME != ''
+        if: inputs.deploy-function && env.FUNCTION_CAF_NAME != ''
         uses: azure/functions-action@v1
         with:
           app-name: ${{ env.FUNCTION_CAF_NAME }}
